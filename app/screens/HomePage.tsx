@@ -3,9 +3,8 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 
 
 const HomePage = ({ route, navigation }) => {
-  const { role } = route.params; // Getting the role from the route params
+  const { role } = route.params;
 
-  // Function to handle navigation based on role
   const navigateBasedOnRole = () => {
     switch (role) {
       case 'Hosteller':
@@ -15,34 +14,30 @@ const HomePage = ({ route, navigation }) => {
         navigation.navigate('SearchHostel');
         break;
       case 'Admin':
-        navigation.navigate('AdminDashboard');
+        navigation.navigate('AdminDashboard'); // Ensure this works
         break;
       default:
         Alert.alert('Error', 'Invalid role');
     }
   };
-  
 
   return (
     <View style={styles.container}>
-      <Text style={styles.heading}>Welcome, {role === 'Hosteller' ? 'Hosteller' : 'Hostellite'}!</Text>
-
-      <View style={styles.content}>
-        {role === 'Hosteller' ? (
-          <Text style={styles.subHeading}>Add Your Hostel</Text>
-        ) : (
-          <Text style={styles.subHeading}>Looking for a Hostel</Text>
-        )}
-      </View>
+      <Text style={styles.heading}>Welcome, {role}!</Text>
 
       <TouchableOpacity style={styles.button} onPress={navigateBasedOnRole}>
         <Text style={styles.buttonText}>
-          {role === 'Hosteller' ? 'Add Hostel' : 'Find Hostel'}
+          {role === 'Hosteller'
+            ? 'Add Hostel'
+            : role === 'Hostellite'
+            ? 'Find Hostel'
+            : 'Manage Dashboard'}
         </Text>
       </TouchableOpacity>
     </View>
   );
 };
+
 
 const styles = StyleSheet.create({
   container: {

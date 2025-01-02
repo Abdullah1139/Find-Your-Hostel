@@ -6,12 +6,14 @@ import Registration from '../screens/Registration';
 import Login from '../screens/Login';
 import HomePage from '../screens/HomePage';
 import AdminDashboard from '../screens/AdminDashboard';
+import AddHostel from '../screens/AddHostel';
+import SearchHostel from '../screens/SearchHostel';
 
 const Stack = createStackNavigator();
 
 const AppNavigator = () => {
   return (
-      <Stack.Navigator initialRouteName="LandingPage">
+      <Stack.Navigator initialRouteName="LandingPage" >
         <Stack.Screen 
           name="LandingPage" 
           component={LandingPage} 
@@ -35,7 +37,17 @@ const AppNavigator = () => {
         <Stack.Screen 
           name="AdminDashboard" 
           component={AdminDashboard} 
-          options={{ title: 'Admin' }} 
+          options={{  title: 'Admin' }} 
+        />
+          <Stack.Screen 
+          name="AddHostel" 
+          component={AddHostel} 
+          options={{ title: 'Add Hostel' }} 
+        />
+         <Stack.Screen 
+          name="SearchHostel" 
+          component={SearchHostel} 
+          options={{ title: 'Add Hostel' }} 
         />
       </Stack.Navigator>
   );

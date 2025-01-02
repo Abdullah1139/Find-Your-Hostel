@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 
+const Login = () => {
+  const navigation = useNavigation();
 
-const Login = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
@@ -19,7 +21,7 @@ const Login = ({ navigation }) => {
 
     const data = { email, password };
     try {
-      const response = await fetch('http://192.168.1.6:5000/api/users/login', {
+      const response = await fetch('http://192.168.1.9:5000/api/users/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -30,12 +32,8 @@ const Login = ({ navigation }) => {
       const result = await response.json();
 
       if (response.ok) {
-        // Store the token and user details in state or AsyncStorage
         const { token, user } = result;
-
-        // Pass user role to the HomePage
         navigation.navigate('Home', { role: user.role, token });
-
         Alert.alert('Success', `Welcome ${user.name}!`);
       } else {
         Alert.alert('Error', result.message || 'Login failed.');
@@ -44,6 +42,10 @@ const Login = ({ navigation }) => {
       console.error(error);
       Alert.alert('Error', 'An error occurred. Please try again.');
     }
+  };
+
+  const navigateToSignUp = () => {
+    navigation.navigate('Registration'); // Navigate to the Registration screen
   };
 
   return (
@@ -75,6 +77,12 @@ const Login = ({ navigation }) => {
 
       <TouchableOpacity style={styles.button} onPress={handleLogin}>
         <Text style={styles.buttonText}>Login</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.linkButton} onPress={navigateToSignUp}>
+        <Text style={styles.linkButtonText}>
+          Don't have an account? <Text style={styles.linkText}>Sign Up</Text>
+        </Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -121,6 +129,18 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '600',
+  },
+  linkButton: {
+    marginTop: 15,
+    alignItems: 'center',
+  },
+  linkButtonText: {
+    color: '#6A0DAD',
+    fontSize: 16,
+  },
+  linkText: {
+    fontWeight: 'bold',
+    textDecorationLine: 'underline',
   },
 });
 

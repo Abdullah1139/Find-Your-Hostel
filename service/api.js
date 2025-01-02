@@ -1,13 +1,10 @@
 // Dynamically set the BASE_URL based on the environment
-const BASE_URL =
-  process.env.NODE_ENV === 'development'
-    ? 'http://192.168.1.6:5000/api/users' // Use your laptop's IP for physical device testing
-    : 'http://localhost:5000/api/users'; // Use localhost for development on the same machine
+const BASE_URL ='http://192.168.20.6:5000/api'
 
 // Function to register a user
 export const registerUser = async (data) => {
   try {
-    const response = await fetch(`${BASE_URL}/register`, {
+    const response = await fetch(`${BASE_URL}/users/register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
