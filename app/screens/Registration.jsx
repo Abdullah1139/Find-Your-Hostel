@@ -1,38 +1,72 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
-import { registerUser } from '../../service/api'; // Import the API function
+import { useDispatch, useSelector } from 'react-redux';
+import { registerUser } from '../../src/redux/authSlice';
+import { useNavigation } from '@react-navigation/native';
 
-const Registration = ({ navigation }) => {
+const Registration = () => {
+  const navigation = useNavigation();
+  const dispatch = useDispatch();
+  const { loading, error, user } = useSelector(state => state.auth);
+
   const [role, setRole] = useState('Hostellite');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
 
   const validateInput = () => {
-    if (!name || !email || !password) {
+    const nameRegex = /^[A-Za-z\s]+$/;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const passwordMinLength = 6;
+
+    if (!name || !email || !phone || !password) {
       Alert.alert('Error', 'Please fill out all required fields.');
       return false;
     }
+
+    if (!nameRegex.test(name)) {
+      Alert.alert('Error', 'Name should only contain alphabets.');
+      return false;
+    }
+
+    if (!emailRegex.test(email)) {
+      Alert.alert('Error', 'Please enter a valid email address.');
+      return false;
+    }
+
+    if (!/^\d{11}$/.test(phone)) {
+      Alert.alert('Error', 'Phone number must be exactly 11 digits.');
+      return false;
+    }
+
+    if (password.length < passwordMinLength) {
+      Alert.alert('Error', `Password must be at least ${passwordMinLength} characters long.`);
+      return false;
+    }
+
     return true;
   };
 
-  const handleRegister = async () => {
+  const handleRegister = () => {
     if (!validateInput()) return;
 
-    const data = { name, email, password, role };
-    try {
-      const result = await registerUser(data);
-      Alert.alert('Success', result.message);
-      navigation.navigate('Login'); // Navigate to login page after registration
-    } catch (error) {
-      Alert.alert('Error', error.message);
-    }
+    dispatch(registerUser({ name, email, phone, password, role }));
   };
 
-  const navigateToLogin = () => {
-    navigation.navigate('Login'); // Navigate to the login page
-  };
+  useEffect(() => {
+    if (user) {
+      Alert.alert('Success', 'Registration successful!');
+      navigation.navigate('Login');
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (error) {
+      Alert.alert('Registration Error', error);
+    }
+  }, [error]);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -73,6 +107,18 @@ const Registration = ({ navigation }) => {
       </View>
 
       <View style={styles.inputContainer}>
+        <Text style={styles.label}>Phone Number</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="11-digit phone number"
+          keyboardType="numeric"
+          maxLength={11}
+          value={phone}
+          onChangeText={setPhone}
+        />
+      </View>
+
+      <View style={styles.inputContainer}>
         <Text style={styles.label}>Password</Text>
         <TextInput
           style={styles.input}
@@ -84,10 +130,12 @@ const Registration = ({ navigation }) => {
       </View>
 
       <TouchableOpacity style={styles.button} onPress={handleRegister}>
-        <Text style={styles.buttonText}>Register</Text>
+        <Text style={styles.buttonText}>
+          {loading ? 'Registering...' : 'Register'}
+        </Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.linkButton} onPress={navigateToLogin}>
+      <TouchableOpacity style={styles.linkButton} onPress={() => navigation.navigate('Login')}>
         <Text style={styles.linkButtonText}>Already have an account? Login</Text>
       </TouchableOpacity>
     </ScrollView>
@@ -106,7 +154,6 @@ const styles = StyleSheet.create({
     color: '#6A0DAD',
     textAlign: 'center',
     marginBottom: 30,
-    fontFamily: 'Pacifico-Regular',
   },
   inputContainer: {
     marginBottom: 20,

@@ -17,7 +17,7 @@ const UsersScreen: React.FC = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch('http://192.168.1.9:5000/api/users/all-users', {
+      const response = await fetch('http://192.168.203.6:5000/api/users/all-users', {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });

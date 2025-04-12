@@ -1,9 +1,10 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { useSelector } from 'react-redux';
+import MyBookingsScreen from '../(hostellite)/MyBookingScreen';
 
-
-const HomePage = ({ route, navigation }) => {
-  const { role } = route.params;
+const HomePage = ({ navigation }) => {
+  const role = useSelector((state) => state.auth.role) || 'User'; // ✅ Read role from Redux
 
   const navigateBasedOnRole = () => {
     switch (role) {
@@ -14,7 +15,7 @@ const HomePage = ({ route, navigation }) => {
         navigation.navigate('SearchHostel');
         break;
       case 'Admin':
-        navigation.navigate('AdminDashboard'); // Ensure this works
+        navigation.navigate('AdminDashboard');
         break;
       default:
         Alert.alert('Error', 'Invalid role');
@@ -38,7 +39,6 @@ const HomePage = ({ route, navigation }) => {
   );
 };
 
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -52,12 +52,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#6A0DAD',
     marginBottom: 20,
-  },
-  subHeading: {
-    fontSize: 20,
-    color: '#333333',
-    marginBottom: 30,
-    fontWeight: '500',
   },
   button: {
     backgroundColor: '#6A0DAD',

@@ -15,7 +15,7 @@ const LandingPage = () => {
         <Text style={styles.title}>Find Your Hostel</Text>
         <TouchableOpacity 
           style={styles.button}
-          onPress={() => navigation.navigate('Registration')} // Navigate to "Registration" screen
+          onPress={() => navigation.navigate('Login')} // Navigate to "Registration" screen
         >
           <Text style={styles.buttonText}>Get Started</Text>
         </TouchableOpacity>
