@@ -1,5 +1,5 @@
 // Dynamically set the BASE_URL based on the environment
-export const BASE_URL ='http://192.168.1.14:5001/api'
+export const BASE_URL ='http://192.168.1.18:5001/api'
 
 // Function to register a user
 export const registerUser = async (data) => {

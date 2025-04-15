@@ -10,7 +10,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   Modal,
-  ScrollView
+  ScrollView,
+  Alert
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { BASE_URL } from '../../service/api';
@@ -31,8 +32,8 @@ const SearchHostel = () => {
 
   // Common amenities to filter by
   const amenitiesList = [
-    'AC',
-    'WiFi',
+    'Ac',
+    'Wifi',
     'Gas',
     'Laundry',
     'Geyser',
@@ -54,7 +55,7 @@ const SearchHostel = () => {
         return;
       }
       setToken(storedToken);
-      await fetchHostels(storedToken);
+      await fetchHostelsWithRooms(storedToken);
     } catch (error) {
       console.error('Initialization error:', error);
       Alert.alert('Error', 'Failed to load hostels');
@@ -63,38 +64,95 @@ const SearchHostel = () => {
     }
   };
 
-  const fetchHostels = async (authToken) => {
+  const fetchHostelsWithRooms = async (authToken) => {
     try {
-      const response = await fetch(`${BASE_URL}/hostels/all`, {
+      const hostelsResponse = await fetch(`${BASE_URL}/hostels/all`, {
         headers: {
           'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'application/json',
         },
       });
-
-      if (response.status === 401) {
+  
+      if (hostelsResponse.status === 401) {
         Alert.alert('Session Expired', 'Please login again');
         await AsyncStorage.removeItem('userToken');
         navigation.navigate('Login');
         return;
       }
-
-      const data = await response.json();
-      setHostels(data);
+  
+      if (!hostelsResponse.ok) {
+        throw new Error(`Failed to fetch hostels: ${hostelsResponse.status}`);
+      }
+  
+      const hostelsData = await hostelsResponse.json();
+      
+      const hostelsWithRooms = await Promise.all(
+        hostelsData.map(async (hostel) => {
+          try {
+            const roomsResponse = await fetch(`${BASE_URL}/rooms/hostel/${hostel._id}`, {
+              headers: {
+                'Authorization': `Bearer ${authToken}`,
+              },
+            });
+            
+            if (!roomsResponse.ok) {
+              console.warn(`Failed to fetch rooms for hostel ${hostel._id}: ${roomsResponse.status}`);
+              return { 
+                ...hostel, 
+                rooms: [],
+                roomsError: `Failed to load room data (Status: ${roomsResponse.status})`
+              };
+            }
+            
+            const rooms = await roomsResponse.json();
+            return { 
+              ...hostel, 
+              rooms,
+              roomsError: null
+            };
+          } catch (error) {
+            console.error(`Error fetching rooms for hostel ${hostel._id}:`, error);
+            return { 
+              ...hostel, 
+              rooms: [],
+              roomsError: 'Network error loading room data'
+            };
+          }
+        })
+      );
+  
+      setHostels(hostelsWithRooms);
     } catch (error) {
       console.error('Fetch error:', error);
-      Alert.alert('Error', 'Failed to fetch hostels');
+      Alert.alert('Error', 'Failed to fetch hostels and rooms');
+      setHostels([]);
     }
+  };
+
+  const normalizeAmenities = (amenities) => {
+    if (!amenities) return [];
+    
+    // If amenities is already an array of strings (not CSV), return as is
+    if (Array.isArray(amenities) && amenities.length > 0 && !amenities[0].includes(',')) {
+      return amenities.map(a => a.trim());
+    }
+    
+    // Handle case where amenities is an array with CSV string
+    const amenityString = Array.isArray(amenities) ? amenities[0] : amenities;
+    return amenityString.split(',').map(a => a.trim());
   };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchHostels(token);
+    await fetchHostelsWithRooms(token);
     setRefreshing(false);
   };
 
   const handleReserve = (hostel) => {
-    navigation.navigate('Reservation', { hostel });
+    navigation.navigate('Reservation', { 
+      hostel,
+      rooms: hostel.rooms 
+    });
   };
 
   const toggleAmenity = (amenity) => {
@@ -117,60 +175,89 @@ const SearchHostel = () => {
   };
 
   const filteredHostels = hostels.filter((hostel) => {
-    // Search filter
     const matchesSearch = 
       hostel.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       hostel.location.toLowerCase().includes(searchQuery.toLowerCase());
     
-    // Price filter
-    const matchesPrice = 
-      hostel.price >= priceRange[0] && 
-      hostel.price <= priceRange[1];
+    const hasMatchingRooms = hostel.rooms.some(room => 
+      room.pricePerBed >= priceRange[0] && 
+      room.pricePerBed <= priceRange[1]
+    );
     
-    // Amenities filter
+    const hostelAmenities = normalizeAmenities(hostel.amenities);
+    
     const matchesAmenities = 
       selectedAmenities.length === 0 ||
-      (hostel.amenities && 
-       selectedAmenities.every(amenity => 
-         hostel.amenities.includes(amenity)));
+      selectedAmenities.every(amenity => 
+        hostelAmenities.includes(amenity));
     
-    return matchesSearch && matchesPrice && matchesAmenities;
+    return matchesSearch && (hostel.rooms.length === 0 || hasMatchingRooms) && matchesAmenities;
   });
 
-  const renderHostelCard = ({ item }) => (
-    <View style={styles.card}>
-      {item.images?.[0] && (
-        <Image source={{ uri: item.images[0] }} style={styles.image} />
-      )}
-      <View style={styles.cardContent}>
-        <Text style={styles.hostelName}>{item.name}</Text>
-        <Text style={styles.hostelAddress}>{item.location}</Text>
-        <Text style={styles.priceRange}>Price: {item.price} PKR/month</Text>
-        <Text style={styles.availability}>
-          {item.availability ? 'Available' : 'Fully Booked'}
-        </Text>
-        
-        {item.amenities && (
-          <Text style={styles.amenities}>
-            Amenities: {item.amenities.join(', ')}
-          </Text>
-        )}
+  const renderHostelCard = ({ item }) => {
+    const prices = item.rooms.map(room => room.pricePerBed);
+    const minPrice = prices.length ? Math.min(...prices) : 0;
+    const maxPrice = prices.length ? Math.max(...prices) : 0;
+    
+    const availableBeds = item.rooms.reduce((sum, room) => sum + (room.availableBeds || 0), 0);
+    const isAvailable = availableBeds > 0;
 
-        <TouchableOpacity 
-          style={[
-            styles.reserveButton,
-            !item.availability && styles.disabledButton
-          ]}
-          onPress={() => handleReserve(item)}
-          disabled={!item.availability}
-        >
-          <Text style={styles.reserveButtonText}>
-            {item.availability ? 'Reserve Now' : 'Not Available'}
-          </Text>
-        </TouchableOpacity>
+    const hostelAmenities = normalizeAmenities(item.amenities);
+  
+    return (
+      <View style={styles.card}>
+        {item.images?.[0] && (
+          <Image source={{ uri: item.images[0] }} style={styles.image} />
+        )}
+        <View style={styles.cardContent}>
+          <Text style={styles.hostelName}>{item.name}</Text>
+          <Text style={styles.hostelAddress}>{item.location}</Text>
+          
+          {item.roomsError ? (
+            <>
+              <Text style={styles.errorText}>{item.roomsError}</Text>
+              <Text style={styles.priceRange}>Price: Information unavailable</Text>
+            </>
+          ) : item.rooms.length > 0 ? (
+            <>
+              <Text style={styles.priceRange}>
+                Price: {minPrice === maxPrice ? 
+                  `${minPrice} PKR/bed` : 
+                  `${minPrice} - ${maxPrice} PKR/bed`}
+              </Text>
+              <Text style={styles.availability}>
+                Available Beds: {availableBeds}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.priceRange}>No room information available</Text>
+            </>
+          )}
+          
+          {hostelAmenities.length > 0 && (
+            <Text style={styles.amenities}>
+              Facilities: {hostelAmenities.join(', ')}
+            </Text>
+          )}
+  
+          <TouchableOpacity 
+            style={[
+              styles.reserveButton,
+              (!isAvailable || item.roomsError) && styles.disabledButton
+            ]}
+            onPress={() => handleReserve(item)}
+            disabled={!isAvailable || item.roomsError}
+          >
+            <Text style={styles.reserveButtonText}>
+              {item.roomsError ? 'Room Data Unavailable' : 
+               isAvailable ? 'View Rooms' : 'No Beds Available'}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   if (loading) {
     return (
@@ -182,7 +269,6 @@ const SearchHostel = () => {
 
   return (
     <View style={styles.container}>
-      {/* Search and Filter Bar */}
       <View style={styles.searchContainer}>
         <Feather name="search" size={20} color="#333" style={styles.searchIcon} />
         <TextInput
@@ -199,7 +285,6 @@ const SearchHostel = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Filters Modal */}
       <Modal
         visible={showFilters}
         animationType="slide"
@@ -215,9 +300,8 @@ const SearchHostel = () => {
           </View>
 
           <ScrollView style={styles.modalContent}>
-            {/* Price Range Filter */}
             <View style={styles.filterSection}>
-              <Text style={styles.filterTitle}>Price Range (PKR)</Text>
+              <Text style={styles.filterTitle}>Price Range (PKR per bed)</Text>
               <View style={styles.priceRangeContainer}>
                 <TextInput
                   style={styles.priceInput}
@@ -229,25 +313,24 @@ const SearchHostel = () => {
                 <TextInput
                   style={styles.priceInput}
                   value={priceRange[1].toString()}
-                  onChangeText={(text) => setPriceRange([priceRange[0], parseInt(text) || 50000])}
+                  onChangeText={(text) => setPriceRange([priceRange[0], parseInt(text) || 0])}
                   keyboardType="numeric"
                 />
               </View>
             </View>
 
-            {/* Amenities Filter */}
             <View style={styles.filterSection}>
               <Text style={styles.filterTitle}>Amenities</Text>
               {amenitiesList.map((amenity) => (
-                  <View key={amenity} style={styles.checkboxContainer}>
-                    <Checkbox
-                      value={selectedAmenities.includes(amenity)}
-                      onValueChange={() => toggleAmenity(amenity)}
-                      color={selectedAmenities.includes(amenity) ? '#6A0DAD' : undefined}
-                    />
-                    <Text style={styles.checkboxLabel}>{amenity}</Text>
-                  </View>
-                ))}
+                <View key={amenity} style={styles.checkboxContainer}>
+                  <Checkbox
+                    value={selectedAmenities.includes(amenity)}
+                    onValueChange={() => toggleAmenity(amenity)}
+                    color={selectedAmenities.includes(amenity) ? '#6A0DAD' : undefined}
+                  />
+                  <Text style={styles.checkboxLabel}>{amenity}</Text>
+                </View>
+              ))}
             </View>
           </ScrollView>
 
@@ -268,7 +351,6 @@ const SearchHostel = () => {
         </View>
       </Modal>
 
-      {/* Hostel List */}
       <FlatList
         data={filteredHostels}
         renderItem={renderHostelCard}
@@ -400,7 +482,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
   },
-  // Modal Styles
   modalContainer: {
     flex: 1,
     backgroundColor: '#FFF',
@@ -489,7 +570,12 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: '600',
   },
-  
+  errorText: {
+    color: '#FF0000',
+    fontSize: 14,
+    marginBottom: 5,
+    fontStyle: 'italic',
+  },
 });
 
 export default SearchHostel;

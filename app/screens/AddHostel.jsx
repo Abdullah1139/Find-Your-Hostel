@@ -105,7 +105,7 @@ const ManageHostels = () => {
 
  // Replace your current pickImages function with this:
 
-const pickImages = async () => {
+ const pickImages = async () => {
   try {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     
@@ -123,19 +123,24 @@ const pickImages = async () => {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: false, // Disable editing for multiple selection
       aspect: [4, 3],
       quality: 0.8,
-      allowsMultipleSelection: false, // Set to true if you want multiple images
+      allowsMultipleSelection: true, // Enable multiple selection
+      selectionLimit: 10, // Optional: set a limit
     });
 
     if (!result.canceled && result.assets) {
-      // For single image selection
-      setImages([result.assets[0].uri]);
+      // Get all selected images
+      const selectedImages = result.assets.map(asset => asset.uri);
       
-      // For multiple images (if allowsMultipleSelection is true):
-      // const selectedImages = result.assets.map(asset => asset.uri);
-      // setImages(selectedImages);
+      // If editing existing hostel, append new images to existing ones
+      if (selectedHostel) {
+        setImages(prev => [...prev, ...selectedImages]);
+      } else {
+        // For new hostel, set all selected images
+        setImages(selectedImages);
+      }
     }
   } catch (error) {
     console.error('Image picker error:', error);
@@ -461,7 +466,7 @@ const pickImages = async () => {
           {images.length > 0 && (
   <View style={styles.imagePreviewContainer}>
     {images.map((uri, index) => (
-      <View key={index} style={styles.imageWrapper}>
+      <View key={`${uri}-${index}`} style={styles.imageWrapper}>
         <Image
           source={{ uri }}
           style={styles.previewImage}
@@ -689,11 +694,31 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     backgroundColor: '#fff',
   },
-  previewImage: {
-    width: 150,
-    height: 150,
+  imagePreviewContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    marginBottom: 15,
+  },
+  imageWrapper: {
+    position: 'relative',
     margin: 5,
+  },
+  previewImage: {
+    width: 100,
+    height: 100,
     borderRadius: 8,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    right: 5,
+    top: 5,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   cancelButton: {
     padding: 15,

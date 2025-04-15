@@ -1,203 +1,176 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Image,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  FlatList,
-  Modal
+  View, Text, StyleSheet, ScrollView, Image,
+  TouchableOpacity, Alert, ActivityIndicator, FlatList
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { BASE_URL } from '../../service/api';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import StripePayment from './StripePayment';
+import { useSelector, useDispatch } from 'react-redux';
+import { BASE_URL } from '../../service/api';
+import { createBooking } from '../../src/redux/bookSlice';
 
 const ReservationScreen = () => {
-  const route = useRoute();
+  const { hostel } = useRoute().params;
   const navigation = useNavigation();
-  const { hostel } = route.params;
+  const dispatch = useDispatch();
+  const { token } = useSelector((state) => state.auth);
+  const { status: bookingStatus, error: bookingError } = useSelector((state) => state.bookings);
   
-  const [loading, setLoading] = useState(false);
-  const [token, setToken] = useState('');
-  const [checkInDate, setCheckInDate] = useState(new Date());
-  const [checkOutDate, setCheckOutDate] = useState(new Date());
-  const [showDateModal, setShowDateModal] = useState(false);
-  const [currentDateType, setCurrentDateType] = useState(null);
-  const [paymentMethod, setPaymentMethod] = useState('online');
-  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-  const [showPayment, setShowPayment] = useState(false);
-  const [rooms, setRooms] = useState([]);
-  const [selectedRoom, setSelectedRoom] = useState(null);
-  const [seatsBooked, setSeatsBooked] = useState(1);
+  // State management
+  const [state, setState] = useState({
+    loading: false,
+    checkInDate: new Date(),
+    checkOutDate: new Date(new Date().setMonth(new Date().getMonth() + 1)),
+    showDatePicker: false,
+    currentDateType: null,
+    paymentMethod: 'online',
+    selectedImageIndex: 0,
+    showPayment: false,
+    rooms: [],
+    selectedRoom: null,
+    seatsBooked: 1
+  });
 
-  // Generate dates for the next 12 months
-  const generateDates = () => {
-    const dates = [];
-    const today = new Date();
-    for (let i = 0; i <= 365; i++) { // 1 year range
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
-      dates.push(date);
-    }
-    return dates;
-  };
+  // Memoized values
+  const selectedRoomObj = useMemo(() => 
+    state.rooms.find(room => room._id === state.selectedRoom), 
+    [state.rooms, state.selectedRoom]);
 
-  const dates = generateDates();
+  const totalMonths = useMemo(() => 
+    (state.checkOutDate.getFullYear() - state.checkInDate.getFullYear()) * 12 + 
+    (state.checkOutDate.getMonth() - state.checkInDate.getMonth()), 
+    [state.checkInDate, state.checkOutDate]);
 
-  useEffect(() => {
-    const loadData = async () => {
-      const storedToken = await AsyncStorage.getItem('userToken');
-      if (!storedToken) {
-        Alert.alert('Error', 'Please login to continue');
-        navigation.navigate('Login');
-        return;
-      }
-      setToken(storedToken);
-      
-      // Set default checkout to 1 month from today
-      const defaultCheckout = new Date();
-      defaultCheckout.setMonth(defaultCheckout.getMonth() + 1);
-      setCheckOutDate(defaultCheckout);
+  const totalPrice = useMemo(() => 
+    selectedRoomObj ? totalMonths * selectedRoomObj.pricePerBed * state.seatsBooked : 0, 
+    [totalMonths, selectedRoomObj, state.seatsBooked]);
 
-      // Fetch available rooms for this hostel
-      try {
-        const response = await fetch(`${BASE_URL}/rooms/hostel/${hostel._id}`);
-        const data = await response.json();
-        setRooms(data);
-        if (data.length > 0) {
-          setSelectedRoom(data[0]._id);
+  // Helper functions
+  const formatDate = useCallback(date => 
+    date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }), []);
+
+  const updateState = useCallback(newState => 
+    setState(prev => ({ ...prev, ...newState })), []);
+
+  // Handlers
+  const handleDateChange = useCallback((event, selectedDate) => {
+    if (event.type === 'set' && selectedDate) {
+      if (state.currentDateType === 'checkIn') {
+        const nextMonth = new Date(selectedDate);
+        nextMonth.setMonth(nextMonth.getMonth() + 1);
+        updateState({ 
+          checkInDate: selectedDate, 
+          checkOutDate: nextMonth,
+          showDatePicker: false 
+        });
+      } else {
+        const minCheckout = new Date(state.checkInDate);
+        minCheckout.setMonth(minCheckout.getMonth() + 1);
+        
+        if (selectedDate < minCheckout) {
+          Alert.alert('Minimum Stay', 'Hostel requires a minimum stay of 1 month');
+          updateState({ 
+            checkOutDate: minCheckout,
+            showDatePicker: false 
+          });
+        } else {
+          updateState({ 
+            checkOutDate: selectedDate,
+            showDatePicker: false 
+          });
         }
+      }
+    } else {
+      updateState({ showDatePicker: false });
+    }
+  }, [state.currentDateType, state.checkInDate]);
+
+// In your handleBookNow function
+const handleBookNow = async () => {
+  try {
+    // 1. Create pending booking first
+    const bookingResult = await dispatch(createBooking({
+      hostelId: hostel._id,
+      roomId: state.selectedRoom,
+      checkInDate: state.checkInDate.toISOString(),
+      checkOutDate: state.checkOutDate.toISOString(),
+      seatsBooked: state.seatsBooked,
+      paymentStatus: 'pending',
+      amount: totalPrice
+    }));
+
+    if (!createBooking.fulfilled.match(bookingResult)) {
+      throw new Error('Booking creation failed');
+    }
+
+    const booking = bookingResult.payload;
+
+    // 2. Only then show payment for pending bookings
+    if (state.paymentMethod === 'online') {
+      updateState({ 
+        showPayment: true,
+        currentBookingId: booking._id // Store booking ID
+      });
+    } else {
+      // Handle cash payment
+      await dispatch(confirmBooking(booking._id));
+      navigation.navigate('BookingConfirmation', { bookingId: booking._id });
+    }
+  } catch (error) {
+    Alert.alert('Error', error.message);
+  }
+};
+
+  // Effects
+  useEffect(() => {
+    const loadRooms = async () => {
+      try {
+        updateState({ loading: true });
+        const roomsRes = await fetch(`${BASE_URL}/rooms/hostel/${hostel._id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+        
+        if (!roomsRes.ok) {
+          throw new Error('Failed to fetch rooms');
+        }
+
+        const rooms = await roomsRes.json();
+        updateState({ 
+          rooms,
+          selectedRoom: rooms[0]?._id || null,
+          loading: false
+        });
       } catch (error) {
-        console.error('Error fetching rooms:', error);
+        console.error('Error:', error);
+        Alert.alert('Error', error.message || 'Failed to load rooms');
+        updateState({ loading: false });
       }
     };
-    loadData();
-  }, []);
-
-  const handleDateSelect = (date) => {
-    if (currentDateType === 'checkIn') {
-      setCheckInDate(date);
-      // Auto-set checkout to checkin + 1 month (minimum duration)
-      const nextMonth = new Date(date);
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
-      setCheckOutDate(nextMonth);
-    } else {
-      // Validate that checkout is at least 1 month after checkin
-      const minCheckout = new Date(checkInDate);
-      minCheckout.setMonth(minCheckout.getMonth() + 1);
-      
-      if (date < minCheckout) {
-        Alert.alert('Minimum Stay', 'Hostel requires a minimum stay of 1 month');
-        setCheckOutDate(minCheckout);
-      } else {
-        setCheckOutDate(date);
-      }
+    
+    if (token) {
+      loadRooms();
     }
-    setShowDateModal(false);
-  };
+  }, [hostel._id, token]);
 
-  const openDateModal = (type) => {
-    setCurrentDateType(type);
-    setShowDateModal(true);
-  };
-
-  const calculateTotal = () => {
-    const months = (checkOutDate.getFullYear() - checkInDate.getFullYear()) * 12 + 
-                  (checkOutDate.getMonth() - checkInDate.getMonth());
-    const selectedRoomObj = rooms.find(room => room._id === selectedRoom);
-    if (!selectedRoomObj) return 0;
-    return months * selectedRoomObj.pricePerBed * seatsBooked;
-  };
-
-  const formatDate = (date) => {
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const handleBookNow = async () => {
-    if (paymentMethod === 'online' && !showPayment) {
-      setShowPayment(true);
-      return;
-    }
-
-    const months = (checkOutDate.getFullYear() - checkInDate.getFullYear()) * 12 + 
-                   (checkOutDate.getMonth() - checkInDate.getMonth());
-
-    if (months < 1) {
-      Alert.alert('Minimum Stay', 'Hostel requires a minimum stay of 1 month');
-      return;
-    }
-
-    if (!selectedRoom) {
-      Alert.alert('Error', 'Please select a room');
-      return;
-    }
-
-    if (seatsBooked < 1) {
-      Alert.alert('Error', 'Please select at least one seat');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await fetch(`${BASE_URL}/bookings/book`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          hostelId: hostel._id,
-          roomId: selectedRoom,
-          checkInDate,
-          checkOutDate,
-          seatsBooked,
-          paymentStatus: paymentMethod === 'online' ? 'completed' : 'pending'
-        }),
-      });
-
-      const contentType = response.headers.get('content-type');
-      const isJson = contentType && contentType.includes('application/json');
-      const data = isJson ? await response.json() : await response.text();
-
-      if (!response.ok) {
-        throw new Error((isJson && data.message) || data || 'Booking failed');
-      }
-
-      Alert.alert('Success', 'Booking confirmed!', [
-        { text: 'OK', onPress: () => navigation.navigate('MyBookings') }
-      ]);
-    } catch (error) {
-      console.error('Booking error:', error.message);
-      Alert.alert('Error', error.message || 'Failed to book hostel');
-    } finally {
-      setLoading(false);
-      setShowPayment(false);
-    }
-  };
-
-  const renderAmenity = (amenity) => (
+  // Render helpers
+  const renderAmenity = useCallback((amenity) => (
     <View key={amenity} style={styles.amenityItem}>
       <Feather name="check-circle" size={16} color="#6A0DAD" />
       <Text style={styles.amenityText}>{amenity}</Text>
     </View>
-  );
+  ), []);
 
-  const renderRoomItem = ({ item }) => (
+  const renderRoomItem = useCallback(({ item }) => (
     <TouchableOpacity
       style={[
         styles.roomItem,
-        selectedRoom === item._id && styles.selectedRoomItem
+        state.selectedRoom === item._id && styles.selectedRoomItem
       ]}
-      onPress={() => setSelectedRoom(item._id)}
+      onPress={() => updateState({ selectedRoom: item._id })}
     >
       <Text style={styles.roomNumber}>Room {item.roomNumber}</Text>
       <Text style={styles.roomDetails}>
@@ -205,277 +178,250 @@ const ReservationScreen = () => {
       </Text>
       <Text style={styles.roomPrice}>PKR {item.pricePerBed} per bed</Text>
     </TouchableOpacity>
-  );
+  ), [state.selectedRoom]);
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      {/* Image Gallery */}
-      <View style={styles.imageGalleryContainer}>
-        <Image 
-          source={{ uri: hostel.images[selectedImageIndex] }} 
-          style={styles.mainImage} 
-          resizeMode="cover"
-        />
-        
-        {hostel.images.length > 1 && (
-          <FlatList
-            horizontal
-            data={hostel.images}
-            keyExtractor={(item, index) => index.toString()}
-            renderItem={({ item, index }) => (
-              <TouchableOpacity onPress={() => setSelectedImageIndex(index)}>
-                <Image 
-                  source={{ uri: item }} 
-                  style={[
-                    styles.thumbnail,
-                    index === selectedImageIndex && styles.selectedThumbnail
-                  ]} 
-                />
-              </TouchableOpacity>
-            )}
-            contentContainerStyle={styles.thumbnailList}
+    <View style={styles.mainContainer}>
+      <ScrollView 
+  contentContainerStyle={[styles.container, { paddingBottom: 100 }]} // ⬅️ Extra padding
+  style={styles.scrollView}
+>
+
+        {/* Image Gallery */}
+        <View style={styles.imageGalleryContainer}>
+          <Image 
+            source={{ uri: hostel.images[state.selectedImageIndex] }} 
+            style={styles.mainImage} 
           />
-        )}
-      </View>
-
-      {/* Hostel Details */}
-      <View style={styles.detailsContainer}>
-        <Text style={styles.hostelName}>{hostel.name}</Text>
-        <View style={styles.locationContainer}>
-          <Feather name="map-pin" size={16} color="#666" />
-          <Text style={styles.locationText}>{hostel.location}</Text>
-        </View>
-        
-        <Text style={styles.sectionTitle}>Amenities</Text>
-        <View style={styles.amenitiesContainer}>
-          {hostel.amenities && hostel.amenities.length > 0 ? (
-            hostel.amenities.map(renderAmenity)
-          ) : (
-            <Text style={styles.noAmenitiesText}>No amenities listed</Text>
-          )}
-        </View>
-      </View>
-
-      {/* Booking Form */}
-      <View style={styles.bookingForm}>
-        <Text style={styles.sectionTitle}>Booking Details</Text>
-        
-        {/* Room Selection */}
-        {rooms.length > 0 && (
-          <>
-            <Text style={styles.subSectionTitle}>Select Room</Text>
+          
+          {hostel.images.length > 1 && (
             <FlatList
               horizontal
-              data={rooms}
-              renderItem={renderRoomItem}
-              keyExtractor={item => item._id}
-              contentContainerStyle={styles.roomList}
+              data={hostel.images}
+              keyExtractor={(_, i) => i.toString()}
+              renderItem={({ item, index }) => (
+                <TouchableOpacity onPress={() => updateState({ selectedImageIndex: index })}>
+                  <Image 
+                    source={{ uri: item }} 
+                    style={[
+                      styles.thumbnail,
+                      index === state.selectedImageIndex && styles.selectedThumbnail
+                    ]} 
+                  />
+                </TouchableOpacity>
+              )}
+              contentContainerStyle={styles.thumbnailList}
               showsHorizontalScrollIndicator={false}
             />
-          </>
-        )}
-
-        {/* Seats Selection */}
-        {selectedRoom && (
-          <>
-            <Text style={styles.subSectionTitle}>Number of Beds</Text>
-            <View style={styles.seatsContainer}>
-              <TouchableOpacity
-                style={styles.seatButton}
-                onPress={() => setSeatsBooked(Math.max(1, seatsBooked - 1))}
-                disabled={seatsBooked <= 1}
-              >
-                <Feather name="minus" size={20} color="#6A0DAD" />
-              </TouchableOpacity>
-              
-              <Text style={styles.seatsCount}>{seatsBooked}</Text>
-              
-              <TouchableOpacity
-                style={styles.seatButton}
-                onPress={() => {
-                  const selectedRoomObj = rooms.find(room => room._id === selectedRoom);
-                  if (selectedRoomObj && seatsBooked < selectedRoomObj.availableBeds) {
-                    setSeatsBooked(seatsBooked + 1);
-                  }
-                }}
-                disabled={
-                  !selectedRoom || 
-                  seatsBooked >= rooms.find(r => r._id === selectedRoom)?.availableBeds
-                }
-              >
-                <Feather name="plus" size={20} color="#6A0DAD" />
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-
-        {/* Date Selection */}
-        <Text style={styles.subSectionTitle}>Dates</Text>
-        <View style={styles.datePickerContainer}>
-          <TouchableOpacity 
-            style={styles.dateInput}
-            onPress={() => openDateModal('checkIn')}
-          >
-            <Feather name="calendar" size={20} color="#6A0DAD" />
-            <Text style={styles.dateText}>
-              {formatDate(checkInDate)}
-            </Text>
-          </TouchableOpacity>
-
-          <Feather name="arrow-right" size={20} color="#666" style={styles.dateArrow} />
-
-          <TouchableOpacity 
-            style={styles.dateInput}
-            onPress={() => openDateModal('checkOut')}
-          >
-            <Feather name="calendar" size={20} color="#6A0DAD" />
-            <Text style={styles.dateText}>
-              {formatDate(checkOutDate)}
-            </Text>
-          </TouchableOpacity>
+          )}
         </View>
 
-        {/* Date Selection Modal */}
-        <Modal
-          transparent={true}
-          visible={showDateModal}
-          onRequestClose={() => setShowDateModal(false)}
-        >
-          <View style={styles.modalContainer}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>
-                Select {currentDateType === 'checkIn' ? 'Check-in' : 'Check-out'} Date
+        {/* Hostel Details */}
+        <View style={styles.detailsContainer}>
+          <Text style={styles.hostelName}>{hostel.name}</Text>
+          <View style={styles.locationContainer}>
+            <Feather name="map-pin" size={16} color="#666" />
+            <Text style={styles.locationText}>{hostel.location}</Text>
+          </View>
+          
+          <Text style={styles.sectionTitle}>Amenities</Text>
+          <View style={styles.amenitiesContainer}>
+            {hostel.amenities?.length > 0 ? 
+              hostel.amenities.map(renderAmenity) : 
+              <Text style={styles.noAmenitiesText}>No amenities listed</Text>}
+          </View>
+        </View>
+
+        {/* Booking Form */}
+        <View style={styles.bookingForm}>
+          <Text style={styles.sectionTitle}>Booking Details</Text>
+          
+          {/* Room Selection - Always show section */}
+          <View>
+            <Text style={styles.subSectionTitle}>Select Room</Text>
+            {state.rooms.length > 0 ? (
+              <FlatList
+                horizontal
+                data={state.rooms}
+                renderItem={renderRoomItem}
+                keyExtractor={item => item._id}
+                contentContainerStyle={styles.roomList}
+                showsHorizontalScrollIndicator={false}
+              />
+            ) : (
+              <Text style={styles.loadingText}>
+                {state.loading ? 'Loading rooms...' : 'No rooms available'}
               </Text>
-              <ScrollView>
-                {dates.map((date, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={styles.dateOption}
-                    onPress={() => handleDateSelect(date)}
-                  >
-                    <Text style={styles.dateOptionText}>
-                      {formatDate(date)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              <TouchableOpacity
-                style={styles.modalCloseButton}
-                onPress={() => setShowDateModal(false)}
-              >
-                <Text style={styles.modalCloseText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
+            )}
           </View>
-        </Modal>
 
-        {/* Payment Method */}
-        <Text style={styles.subSectionTitle}>Payment Method</Text>
-        <View style={styles.paymentMethods}>
-          <TouchableOpacity
-            style={[
-              styles.paymentMethod,
-              paymentMethod === 'online' && styles.selectedPaymentMethod
-            ]}
-            onPress={() => setPaymentMethod('online')}
-          >
-            <Feather 
-              name={paymentMethod === 'online' ? 'check-circle' : 'circle'} 
-              size={20} 
-              color={paymentMethod === 'online' ? '#6A0DAD' : '#666'} 
-            />
-            <Text style={styles.paymentMethodText}>Online Payment</Text>
-          </TouchableOpacity>
+          {/* Seats Selection - Only show if room selected */}
+          {state.selectedRoom && (
+            <>
+              <Text style={styles.subSectionTitle}>Number of Beds</Text>
+              <View style={styles.seatsContainer}>
+                <TouchableOpacity
+                  style={styles.seatButton}
+                  onPress={() => updateState({ seatsBooked: Math.max(1, state.seatsBooked - 1) })}
+                  disabled={state.seatsBooked <= 1}
+                >
+                  <Feather name="minus" size={20} color="#6A0DAD" />
+                </TouchableOpacity>
+                
+                <Text style={styles.seatsCount}>{state.seatsBooked}</Text>
+                
+                <TouchableOpacity
+                  style={styles.seatButton}
+                  onPress={() => {
+                    if (state.seatsBooked < selectedRoomObj.availableBeds) {
+                      updateState({ seatsBooked: state.seatsBooked + 1 });
+                    }
+                  }}
+                  disabled={!state.selectedRoom || state.seatsBooked >= selectedRoomObj?.availableBeds}
+                >
+                  <Feather name="plus" size={20} color="#6A0DAD" />
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
 
-          <TouchableOpacity
-            style={[
-              styles.paymentMethod,
-              paymentMethod === 'cash' && styles.selectedPaymentMethod
-            ]}
-            onPress={() => setPaymentMethod('cash')}
-          >
-            <Feather 
-              name={paymentMethod === 'cash' ? 'check-circle' : 'circle'} 
-              size={20} 
-              color={paymentMethod === 'cash' ? '#6A0DAD' : '#666'} 
-            />
-            <Text style={styles.paymentMethodText}>Pay at Hostel</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Summary */}
-        <View style={styles.summaryContainer}>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Price per bed:</Text>
-            <Text style={styles.summaryValue}>
-              PKR {selectedRoom ? rooms.find(r => r._id === selectedRoom)?.pricePerBed : 'N/A'}
-            </Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Beds:</Text>
-            <Text style={styles.summaryValue}>{seatsBooked}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Months:</Text>
-            <Text style={styles.summaryValue}>
-              {(checkOutDate.getFullYear() - checkInDate.getFullYear()) * 12 + 
-               (checkOutDate.getMonth() - checkInDate.getMonth())}
-            </Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Total:</Text>
-            <Text style={styles.summaryTotal}>PKR {calculateTotal()}</Text>
-          </View>
-        </View>
-
-        {/* Book Now Button */}
-        {paymentMethod === 'online' ? (
-          showPayment ? (
-            <StripePayment
-              amount={calculateTotal()}
-              hostelId={hostel._id}
-              roomId={selectedRoom}
-              checkInDate={checkInDate}
-              checkOutDate={checkOutDate}
-              seatsBooked={seatsBooked}
-              onSuccess={() => {
-                Alert.alert('Success', 'Booking confirmed!', [
-                  { text: 'OK', onPress: () => navigation.navigate('MyBookings') }
-                ]);
-              }}
-              onCancel={() => setShowPayment(false)}
-            />
-          ) : (
-            <TouchableOpacity
-              style={styles.bookButton}
-              onPress={() => setShowPayment(true)}
-              disabled={!selectedRoom || loading}
+          {/* Date Selection */}
+          <Text style={styles.subSectionTitle}>Dates</Text>
+          <View style={styles.datePickerContainer}>
+            <TouchableOpacity 
+              style={styles.dateInput}
+              onPress={() => updateState({ showDatePicker: true, currentDateType: 'checkIn' })}
             >
-              <Text style={styles.bookButtonText}>Proceed to Payment</Text>
+              <Feather name="calendar" size={20} color="#6A0DAD" />
+              <Text style={styles.dateText}>{formatDate(state.checkInDate)}</Text>
             </TouchableOpacity>
-          )
+
+            <Feather name="arrow-right" size={20} color="#666" style={styles.dateArrow} />
+
+            <TouchableOpacity 
+              style={styles.dateInput}
+              onPress={() => updateState({ showDatePicker: true, currentDateType: 'checkOut' })}
+            >
+              <Feather name="calendar" size={20} color="#6A0DAD" />
+              <Text style={styles.dateText}>{formatDate(state.checkOutDate)}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Payment Method */}
+          <Text style={styles.subSectionTitle}>Payment Method</Text>
+          <View style={styles.paymentMethods}>
+            {['online', 'cash'].map(method => (
+              <TouchableOpacity
+                key={method}
+                style={[
+                  styles.paymentMethod,
+                  state.paymentMethod === method && styles.selectedPaymentMethod
+                ]}
+                onPress={() => updateState({ paymentMethod: method })}
+              >
+                <Feather 
+                  name={state.paymentMethod === method ? 'check-circle' : 'circle'} 
+                  size={20} 
+                  color={state.paymentMethod === method ? '#6A0DAD' : '#666'} 
+                />
+                <Text style={styles.paymentMethodText}>
+                  {method === 'online' ? 'Online Payment' : 'Pay at Hostel'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Summary */}
+          <View style={styles.summaryContainer}>
+            {[
+              { label: 'Price per bed:', value: `PKR ${selectedRoomObj?.pricePerBed || 'N/A'}` },
+              { label: 'Beds:', value: state.seatsBooked },
+              { label: 'Months:', value: totalMonths },
+              { label: 'Total:', value: `PKR ${totalPrice}`, total: true }
+            ].map((item, i) => (
+              <View key={i} style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>{item.label}</Text>
+                <Text style={item.total ? styles.summaryTotal : styles.summaryValue}>
+                  {item.value}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+      {/* Fixed Bottom Button - Always visible but conditionally enabled */}
+      
+
+      {/* DateTimePicker */}
+      {state.showDatePicker && (
+        <DateTimePicker
+          value={state.currentDateType === 'checkIn' ? state.checkInDate : state.checkOutDate}
+          mode="date"
+          display="default"
+          minimumDate={state.currentDateType === 'checkOut' ? 
+            new Date(state.checkInDate.getTime() + (30 * 24 * 60 * 60 * 1000)) : // 1 month after check-in
+            new Date()}
+          onChange={handleDateChange}
+        />
+      )}
+      <View style={styles.buttonContainer}>
+        {state.showPayment ? (
+          // In your ReservationScreen component
+<StripePayment
+  amount={totalPrice}
+  hostelId={hostel._id}
+  roomId={state.selectedRoom}
+  checkInDate={state.checkInDate}
+  checkOutDate={state.checkOutDate}
+  seatsBooked={state.seatsBooked}
+  // onSuccess={() => {
+  //   dispatch(confirmBooking(state.currentBookingId));
+  //   navigation.navigate('BookingConfirmation', { 
+  //     bookingId: state.currentBookingId 
+  //   });
+  // }}
+  // onCancel={() => updateState({ showPayment: false })}
+/>
         ) : (
           <TouchableOpacity
-            style={styles.bookButton}
-            onPress={handleBookNow}
-            disabled={!selectedRoom || loading}
+            style={[
+              styles.bookButton, 
+              (!state.selectedRoom || state.loading) && styles.disabledButton
+            ]}
+            onPress={() => {
+              if (state.paymentMethod === 'online') {
+                updateState({ showPayment: true });
+              } else {
+                handleBookNow();
+              }
+            }}
+            disabled={!state.selectedRoom || state.loading}
           >
-            {loading ? (
+            {state.loading ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.bookButtonText}>Book Now</Text>
+              <Text style={styles.bookButtonText}>
+                {state.paymentMethod === 'online' ? 'Proceed to Payment' : 'Book Now'}
+              </Text>
             )}
           </TouchableOpacity>
         )}
       </View>
-    </ScrollView>
+            </ScrollView>
+
+    </View>
   );
 };
-
 const styles = StyleSheet.create({
+  mainContainer: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  scrollView: {
+    marginBottom: 80, // Space for the fixed button
+  },
   container: {
-    paddingBottom: 30,
-    backgroundColor: '#FFFFFF',
+    paddingBottom: 20,
   },
   imageGalleryContainer: {
     marginBottom: 20,
@@ -483,22 +429,21 @@ const styles = StyleSheet.create({
   mainImage: {
     width: '100%',
     height: 250,
+    borderRadius: 8,
   },
   thumbnailList: {
-    paddingHorizontal: 15,
-    paddingTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   thumbnail: {
     width: 60,
     height: 60,
     marginRight: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#EEE',
+    borderRadius: 4,
   },
   selectedThumbnail: {
-    borderColor: '#6A0DAD',
     borderWidth: 2,
+    borderColor: '#6A0DAD',
   },
   detailsContainer: {
     paddingHorizontal: 20,
@@ -507,8 +452,8 @@ const styles = StyleSheet.create({
   hostelName: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
     marginBottom: 5,
+    color: '#333',
   },
   locationContainer: {
     flexDirection: 'row',
@@ -516,27 +461,24 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   locationText: {
-    fontSize: 16,
-    color: '#666',
     marginLeft: 5,
+    color: '#666',
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginTop: 15,
+    fontWeight: 'bold',
     marginBottom: 10,
+    color: '#6A0DAD',
   },
   subSectionTitle: {
     fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
-    marginBottom: 10,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#444',
   },
   amenitiesContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginBottom: 10,
   },
   amenityItem: {
     flexDirection: 'row',
@@ -545,83 +487,85 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   amenityText: {
-    fontSize: 14,
-    color: '#555',
     marginLeft: 5,
+    fontSize: 14,
+    color: '#333',
   },
   noAmenitiesText: {
-    fontSize: 14,
-    color: '#999',
     fontStyle: 'italic',
+    color: '#666',
   },
   bookingForm: {
     paddingHorizontal: 20,
-    marginTop: 10,
   },
   roomList: {
     paddingBottom: 10,
   },
   roomItem: {
-    width: 200,
     padding: 15,
     marginRight: 10,
-    borderWidth: 1,
-    borderColor: '#DDD',
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    width: 180,
+    backgroundColor: '#fff',
   },
   selectedRoomItem: {
     borderColor: '#6A0DAD',
-    backgroundColor: '#F5F0FA',
+    backgroundColor: '#F5E9FF',
   },
   roomNumber: {
-    fontSize: 16,
     fontWeight: 'bold',
     marginBottom: 5,
+    color: '#333',
   },
   roomDetails: {
-    fontSize: 14,
     color: '#666',
     marginBottom: 5,
+    fontSize: 14,
   },
   roomPrice: {
-    fontSize: 14,
-    color: '#6A0DAD',
     fontWeight: 'bold',
+    color: '#6A0DAD',
+    fontSize: 16,
   },
   seatsContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-    paddingHorizontal: 50,
+    marginBottom: 15,
+    justifyContent: 'center',
   },
   seatButton: {
     padding: 10,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: '#6A0DAD',
+    backgroundColor: '#fff',
   },
   seatsCount: {
+    marginHorizontal: 15,
     fontSize: 18,
     fontWeight: 'bold',
+    color: '#333',
+    minWidth: 30,
+    textAlign: 'center',
   },
   datePickerContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 20,
+    marginBottom: 15,
   },
   dateInput: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#DDD',
-    borderRadius: 8,
     padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
   },
   dateText: {
-    fontSize: 16,
     marginLeft: 10,
     color: '#333',
   },
@@ -629,33 +573,34 @@ const styles = StyleSheet.create({
     marginHorizontal: 10,
   },
   paymentMethods: {
-    marginBottom: 20,
+    marginBottom: 15,
   },
   paymentMethod: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 15,
-    borderWidth: 1,
-    borderColor: '#DDD',
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
     marginBottom: 10,
+    backgroundColor: '#fff',
   },
   selectedPaymentMethod: {
     borderColor: '#6A0DAD',
-    backgroundColor: '#F5F0FA',
+    backgroundColor: '#F5E9FF',
   },
   paymentMethodText: {
-    fontSize: 16,
     marginLeft: 10,
     color: '#333',
   },
   summaryContainer: {
-    borderWidth: 1,
-    borderColor: '#EEE',
-    borderRadius: 8,
+    marginTop: 15,
     padding: 15,
-    marginBottom: 20,
+    borderRadius: 8,
+    backgroundColor: '#f9f9f9',
+    borderWidth: 1,
+    borderColor: '#eee',
   },
   summaryRow: {
     flexDirection: 'row',
@@ -663,67 +608,51 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   summaryLabel: {
-    fontSize: 16,
     color: '#666',
   },
   summaryValue: {
-    fontSize: 16,
+    fontWeight: '600',
     color: '#333',
-    fontWeight: '500',
   },
   summaryTotal: {
-    fontSize: 18,
-    color: '#6A0DAD',
     fontWeight: 'bold',
+    color: '#6A0DAD',
+    fontSize: 16,
+  },
+  loadingText: {
+    textAlign: 'center',
+    color: '#666',
+    marginVertical: 10,
+  },
+  buttonContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 20,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    zIndex: 100, // Ensure it's above other elements
+    elevation: 10, // For Android
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   bookButton: {
     backgroundColor: '#6A0DAD',
-    padding: 16,
+    padding: 15,
     borderRadius: 8,
     alignItems: 'center',
   },
+  disabledButton: {
+    backgroundColor: '#ccc',
+  },
   bookButtonText: {
-    color: '#FFF',
-    fontSize: 18,
+    color: '#fff',
     fontWeight: 'bold',
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    margin: 20,
-    borderRadius: 10,
-    maxHeight: '60%',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    padding: 15,
-    textAlign: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#EEE',
-  },
-  dateOption: {
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EEE',
-  },
-  dateOptionText: {
     fontSize: 16,
-  },
-  modalCloseButton: {
-    padding: 15,
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: '#EEE',
-  },
-  modalCloseText: {
-    color: '#6A0DAD',
-    fontSize: 18,
-    fontWeight: 'bold',
   },
 });
 

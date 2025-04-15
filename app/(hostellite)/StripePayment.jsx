@@ -1,90 +1,36 @@
-// StripePayment.js
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useStripe } from '@stripe/stripe-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BASE_URL } from '../../service/api';
+import { Feather } from '@expo/vector-icons';
 
 const StripePayment = ({
   amount,
   hostelId,
+  roomId,
   checkInDate,
   checkOutDate,
-  months,
+  seatsBooked,
   onSuccess,
+  onCancel
 }) => {
   const [loading, setLoading] = useState(false);
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
-  const [clientSecret, setClientSecret] = useState('');
+  const [paymentIntentId, setPaymentIntentId] = useState('');
   const [token, setToken] = useState('');
+  const [paymentCompleted, setPaymentCompleted] = useState(false);
+  const initializedRef = useRef(false);
 
-  useEffect(() => {
-    const loadToken = async () => {
-      const storedToken = await AsyncStorage.getItem('userToken');
-      setToken(storedToken);
-    };
-    loadToken();
-  }, []);
-
-  useEffect(() => {
-    if (token) {
-      initializePaymentSheet();
-    }
-  }, [token]);
-
-  const initializePaymentSheet = async () => {
-    setLoading(true);
+  // Define confirmBooking using useCallback to maintain reference stability
+  const confirmBooking = useCallback(async (intentId) => {
     try {
-      const response = await fetch(`${BASE_URL}/payment/create-payment-intent`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          hostelId,
-          months,
-        }),
+      console.log("Confirming booking with:", { 
+        paymentIntentId: intentId, 
+        hostelId, 
+        roomId 
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to fetch payment intent');
-      }
-
-      const { clientSecret } = data;
-      setClientSecret(clientSecret);
-
-      const { error } = await initPaymentSheet({
-        paymentIntentClientSecret: clientSecret,
-        merchantDisplayName: 'Hostellite',
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-    } catch (error) {
-      Alert.alert('Error', error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const openPaymentSheet = async () => {
-    const { error } = await presentPaymentSheet();
-
-    if (error) {
-      Alert.alert('Payment failed', error.message);
-    } else {
-      // Booking successful
-      await confirmBooking();
-    }
-  };
-  
-
-  const confirmBooking = async () => {
-    setLoading(true);
-    try {
       const response = await fetch(`${BASE_URL}/payment/payment-success`, {
         method: 'POST',
         headers: {
@@ -92,44 +38,184 @@ const StripePayment = ({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          paymentIntentId: intentId,
           hostelId,
+          roomId,
           checkInDate,
           checkOutDate,
+          seatsBooked,
+          amount
         }),
       });
-  
-      const contentType = response.headers.get('content-type');
-      const isJson = contentType && contentType.includes('application/json');
-  
-      const data = isJson ? await response.json() : await response.text();
-  
+
       if (!response.ok) {
-        throw new Error((isJson && data.message) || data || 'Failed to confirm booking');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to confirm booking');
       }
-  
-      onSuccess(data);
+
+      return await response.json();
     } catch (error) {
-      console.error('Booking Error:', error.message);
-      Alert.alert('Booking Error', error.message);
+      console.error('Booking confirmation error:', error);
+      throw error;
+    }
+  }, [token, hostelId, roomId, checkInDate, checkOutDate, seatsBooked, amount]);
+
+  useEffect(() => {
+    const loadToken = async () => {
+      try {
+        const storedToken = await AsyncStorage.getItem('userToken');
+        if (!storedToken) {
+          throw new Error('No authentication token found');
+        }
+        setToken(storedToken);
+      } catch (error) {
+        console.error('Token load error:', error);
+        Alert.alert('Authentication Error', 'Please login again');
+        onCancel?.();
+      }
+    };
+    loadToken();
+  }, []);
+
+  const initializePayment = useCallback(async () => {
+    if (!token || !amount || initializedRef.current) return;
+    
+    setLoading(true);
+    try {
+      console.log('Creating payment intent...');
+      const response = await fetch(`${BASE_URL}/payment/create-payment-intent`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: Math.round(amount * 100),
+          hostelId,
+          roomId,
+          seatsBooked,
+          currency: 'pkr'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to create payment intent');
+      }
+
+      const { clientSecret, paymentIntentId } = await response.json();
+      console.log('Received clientSecret:', clientSecret);
+      
+      if (!clientSecret) {
+        throw new Error('No client secret received from server');
+      }
+
+      setPaymentIntentId(paymentIntentId);
+
+      console.log('Initializing payment sheet...');
+      const { error } = await initPaymentSheet({
+        merchantDisplayName: 'Hostellite',
+        paymentIntentClientSecret: clientSecret,
+        defaultBillingDetails: {
+          name: 'Hostel Booking',
+        }
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      console.log('Payment sheet initialized successfully');
+      initializedRef.current = true;
+    } catch (error) {
+      console.error('Payment initialization error:', error);
+      Alert.alert('Payment Error', error.message || 'Failed to initialize payment');
+      onCancel?.();
     } finally {
       setLoading(false);
     }
-    const raw = await response.text();
-    console.log('🔍 Raw response:', raw);
+  }, [token, amount, hostelId, roomId, seatsBooked, initPaymentSheet]);
 
-  };
+  useEffect(() => {
+    initializePayment();
+  }, [initializePayment]);
+
+  const handlePayment = async () => {
+    if (!initializedRef.current) {
+      Alert.alert('Payment Not Ready', 'Please wait while we set up your payment');
+      return;
+    }
   
+    setLoading(true);
+    try {
+      console.log('Presenting payment sheet...');
+      const { error } = await presentPaymentSheet();
 
+      if (error) {
+        console.error('Payment error:', error);
+        throw error;
+      }
+
+      if (!paymentIntentId) {
+        throw new Error('Missing payment intent ID');
+      }
+  
+      console.log('Payment successful, creating booking...');
+      const bookingData = await confirmBooking(paymentIntentId);
+      
+      setPaymentCompleted(true);
+      onSuccess?.(bookingData);
+    } catch (error) {
+      console.error('Payment processing error:', error);
+      Alert.alert('Payment Failed', error.message || 'Payment could not be completed');
+    } finally {
+      setLoading(false);
+    }
+  };
   return (
     <View style={styles.container}>
-      <Text style={styles.amount}>Total: PKR {amount}</Text>
-
-      {loading ? (
-        <ActivityIndicator color="#6A0DAD" />
-      ) : (
-        <TouchableOpacity style={styles.payButton} onPress={openPaymentSheet}>
-          <Text style={styles.payButtonText}>Pay Now</Text>
+      {!paymentCompleted && (
+        <TouchableOpacity 
+          style={styles.closeButton}
+          onPress={onCancel}
+        >
+          <Feather name="x" size={24} color="#666" />
         </TouchableOpacity>
+      )}
+      
+      {loading && !initializedRef.current ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#6A0DAD" />
+          <Text style={styles.loadingText}>Setting up payment...</Text>
+        </View>
+      ) : paymentCompleted ? (
+        <View style={styles.successContainer}>
+          <Text style={styles.successText}>Payment Successful!</Text>
+          <TouchableOpacity
+            style={styles.closeSuccessButton}
+            onPress={onCancel}
+          >
+            <Text style={styles.closeSuccessText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <>
+          <Text style={styles.amount}>Total: PKR {amount.toLocaleString()}</Text>
+          <TouchableOpacity
+            style={[
+              styles.payButton,
+              loading && styles.disabledButton
+            ]}
+            onPress={handlePayment}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.payButtonText}>Pay Now</Text>
+            )}
+          </TouchableOpacity>
+        </>
       )}
     </View>
   );
@@ -137,13 +223,25 @@ const StripePayment = ({
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
     padding: 20,
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 10,
+    color: '#6A0DAD',
   },
   amount: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 20,
+    color: '#333',
   },
   payButton: {
     backgroundColor: '#6A0DAD',
@@ -151,10 +249,40 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
+  disabledButton: {
+    opacity: 0.7,
+  },
   payButtonText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    zIndex: 1,
+  },
+  successContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successText: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#2E8B57',
+    marginBottom: 20,
+  },
+  closeSuccessButton: {
+    backgroundColor: '#6A0DAD',
+    padding: 10,
+    borderRadius: 5,
+    width: 100,
+    alignItems: 'center',
+  },
+  closeSuccessText: {
+    color: '#fff',
+    fontSize: 16,
   },
 });
 
